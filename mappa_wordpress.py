@@ -34,6 +34,7 @@ SCOPES = [
 STILE_TIPOLOGIE = {
     "Aperitivo": {"colore": "orange", "icona": "glass"},
     "aperitivo": {"colore": "orange", "icona": "glass"},
+    "Mezzi pubblici": {"colore": "brown", "icona": "bus"},
 
     "Museo o visita culturale": {"colore": "purple", "icona": "university"},
     "Culturale": {"colore": "purple", "icona": "university"},
