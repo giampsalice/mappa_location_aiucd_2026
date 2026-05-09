@@ -52,6 +52,7 @@ STILE_TIPOLOGIE = {
     "Hotel": {"colore": "darkblue", "icona": "bed"},
 
     "Sede del Convegno": {"colore": "darkred", "icona": "building"},
+    "Sede del convegno": {"colore": "darkred", "icona": "building"},
 
     "Mezzi pubblici": {"colore": "green", "icona": "bus"},
 
@@ -108,13 +109,7 @@ def normalizza_coordinate(serie):
 def normalizza_colonne(df):
     """
     Normalizza i nomi delle colonne del Google Sheet.
-    Gestisce varianti tipo:
-    - URL immagine
-    - url immagine
-    - link foto
-    - immagine
-    - image
-    - photo
+    Gestisce varianti di maiuscole/minuscole e nomi simili.
     """
     df.columns = [str(col).strip() for col in df.columns]
 
@@ -158,6 +153,23 @@ def normalizza_colonne(df):
 
         elif nome_normale in ["longitudine", "lon", "lng", "longitude"]:
             mappa_colonne[colonna] = "Longitudine"
+
+        elif (
+            "distanza dal convegno" in nome_normale
+            or "distanza convegno" in nome_normale
+            or nome_normale == "distanza"
+            or "distance" in nome_normale
+        ):
+            mappa_colonne[colonna] = "Distanza dal convegno"
+
+        elif (
+            "tempo percorrenza" in nome_normale
+            or "tempo di percorrenza" in nome_normale
+            or "percorrenza" in nome_normale
+            or "durata" in nome_normale
+            or "duration" in nome_normale
+        ):
+            mappa_colonne[colonna] = "Tempo percorrenza"
 
     print("Mappa colonne applicata:", mappa_colonne)
 
@@ -407,14 +419,14 @@ def pulisci_dati(df):
         "Indirizzo",
         "Descrizione",
         "URL immagine",
+        "Distanza dal convegno",
+        "Tempo percorrenza",
     ]
 
     for colonna in colonne_facoltative:
         if colonna not in df.columns:
             df[colonna] = ""
 
-    # Fallback: se la colonna URL immagine è vuota o non riconosciuta,
-    # prova a trovare automaticamente la colonna che contiene URL immagine.
     colonna_auto_immagini = trova_colonna_immagini_automaticamente(df)
 
     if colonna_auto_immagini:
@@ -427,9 +439,24 @@ def pulisci_dati(df):
     df["Indirizzo"] = df["Indirizzo"].fillna("").astype(str).str.strip()
     df["Descrizione"] = df["Descrizione"].fillna("").astype(str).str.strip()
     df["URL immagine"] = df["URL immagine"].fillna("").astype(str).str.strip()
+    df["Distanza dal convegno"] = df["Distanza dal convegno"].fillna("").astype(str).str.strip()
+    df["Tempo percorrenza"] = df["Tempo percorrenza"].fillna("").astype(str).str.strip()
 
     print("URL immagini non vuoti:", (df["URL immagine"] != "").sum())
     print("Primi URL immagine:", df["URL immagine"].head(10).tolist())
+
+    print("Esempi distanza/tempo:")
+    print(
+        df[
+            [
+                "Nome luogo",
+                "Distanza dal convegno",
+                "Tempo percorrenza",
+            ]
+        ]
+        .head(10)
+        .to_string()
+    )
 
     df["Latitudine"] = normalizza_coordinate(df["Latitudine"])
     df["Longitudine"] = normalizza_coordinate(df["Longitudine"])
@@ -463,17 +490,39 @@ def crea_popup(row):
     indirizzo_raw = valore_testo(row, "Indirizzo")
     descrizione_raw = valore_testo(row, "Descrizione")
     url_immagine = valore_testo(row, "URL immagine")
+    distanza_raw = valore_testo(row, "Distanza dal convegno")
+    tempo_raw = valore_testo(row, "Tempo percorrenza")
 
     nome = html.escape(nome_raw)
     tipologia = html.escape(tipologia_raw)
     indirizzo = html.escape(indirizzo_raw)
     descrizione = html.escape(descrizione_raw)
+    distanza = html.escape(distanza_raw)
+    tempo = html.escape(tempo_raw)
 
     stile = ottieni_stile(tipologia_raw)
     colore_marker = stile["colore"]
     colore_hex = COLORI_HEX.get(colore_marker, "#808080")
 
     html_immagine = crea_html_immagine(url_immagine, nome_raw)
+
+    blocco_distanza_tempo = ""
+
+    if distanza or tempo:
+        blocco_distanza_tempo = f"""
+        <div style="
+            background:#f6f6f6;
+            border-radius:10px;
+            padding:8px 10px;
+            margin:8px 0;
+            font-size:12px;
+            color:#333333;
+            line-height:1.35;
+        ">
+            {f"<div><strong>📏 Distanza dal convegno:</strong> {distanza}</div>" if distanza else ""}
+            {f"<div><strong>🚶 Tempo di percorrenza:</strong> {tempo}</div>" if tempo else ""}
+        </div>
+        """
 
     html_popup = f"""
     <div style="
@@ -510,6 +559,8 @@ def crea_popup(row):
             border-top: 1px solid #eeeeee;
         ">
 
+        {blocco_distanza_tempo}
+
         <p style="
             margin: 4px 0;
             font-size: 12px;
@@ -529,7 +580,7 @@ def crea_popup(row):
     </div>
     """
 
-    iframe = folium.IFrame(html_popup, width=320, height=430)
+    iframe = folium.IFrame(html_popup, width=320, height=470)
     return folium.Popup(iframe, max_width=340)
 
 
@@ -541,14 +592,14 @@ def genera_mappa(df):
     centro_lat = df["Latitudine"].mean()
     centro_lng = df["Longitudine"].mean()
 
-    # Mappa chiara impostata come layer di default.
+    # Mappa chiara di default
     mappa = folium.Map(
         location=[centro_lat, centro_lng],
         zoom_start=13,
         tiles="CartoDB positron",
     )
 
-    # Layer alternativi selezionabili.
+    # Layer alternativi selezionabili
     folium.TileLayer(
         tiles="OpenStreetMap",
         name="OpenStreetMap",
