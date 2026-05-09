@@ -117,28 +117,38 @@ def normalizza_coordinate(serie):
 
 def converti_url_drive(url):
     """
-    Converte alcuni link Google Drive in link immagine diretto.
+    Converte link Google Drive in URL compatibili con immagini nei popup.
+    Accetta formati come:
+    - https://drive.google.com/file/d/ID_FILE/view?usp=sharing
+    - https://drive.google.com/open?id=ID_FILE
+    - https://drive.google.com/uc?id=ID_FILE
 
-    Esempio:
-    https://drive.google.com/file/d/ID_FILE/view?usp=sharing
+    Restituisce:
+    - https://drive.google.com/thumbnail?id=ID_FILE&sz=w1000
 
-    diventa:
-    https://drive.google.com/uc?export=view&id=ID_FILE
+    Se l'URL non è Google Drive, lo lascia invariato.
     """
     if not url:
         return ""
 
     url = str(url).strip()
 
+    if "drive.google.com" not in url:
+        return url
+
+    file_id = ""
+
     match = re.search(r"drive\.google\.com/file/d/([^/]+)", url)
     if match:
         file_id = match.group(1)
-        return f"https://drive.google.com/uc?export=view&id={file_id}"
 
-    match = re.search(r"[?&]id=([^&]+)", url)
-    if "drive.google.com" in url and match:
-        file_id = match.group(1)
-        return f"https://drive.google.com/uc?export=view&id={file_id}"
+    if not file_id:
+        match = re.search(r"[?&]id=([^&]+)", url)
+        if match:
+            file_id = match.group(1)
+
+    if file_id:
+        return f"https://drive.google.com/thumbnail?id={file_id}&sz=w1000"
 
     return url
 
@@ -147,6 +157,7 @@ def crea_html_immagine(url_immagine):
     """
     Crea il blocco HTML dell'immagine nel popup.
     Se non c'è immagine, restituisce stringa vuota.
+    Se l'immagine non si carica, la nasconde.
     """
     if not url_immagine:
         return ""
@@ -159,13 +170,16 @@ def crea_html_immagine(url_immagine):
             src="{url_immagine}"
             style="
                 width:100%;
-                max-height:150px;
+                max-height:170px;
                 object-fit:cover;
                 border-radius:10px;
                 margin-bottom:10px;
                 display:block;
+                background:#eeeeee;
             "
             loading="lazy"
+            referrerpolicy="no-referrer"
+            onerror="this.style.display='none';"
         >
     """
 
@@ -215,6 +229,35 @@ def pulisci_dati(df):
 
     df.columns = [str(col).strip() for col in df.columns]
 
+    # Normalizzazione dei nomi colonna per permettere variazioni
+    mappa_colonne = {}
+
+    for colonna in df.columns:
+        nome_normale = str(colonna).strip().lower()
+
+        if nome_normale in ["url immagine", "url immagini", "immagine", "link immagine", "link immagini"]:
+            mappa_colonne[colonna] = "URL immagine"
+
+        if nome_normale in ["nome luogo", "nome", "luogo"]:
+            mappa_colonne[colonna] = "Nome luogo"
+
+        if nome_normale in ["tipologia", "tipo", "categoria"]:
+            mappa_colonne[colonna] = "Tipologia"
+
+        if nome_normale in ["indirizzo", "address"]:
+            mappa_colonne[colonna] = "Indirizzo"
+
+        if nome_normale in ["descrizione", "description"]:
+            mappa_colonne[colonna] = "Descrizione"
+
+        if nome_normale in ["latitudine", "lat", "latitude"]:
+            mappa_colonne[colonna] = "Latitudine"
+
+        if nome_normale in ["longitudine", "lon", "lng", "longitude"]:
+            mappa_colonne[colonna] = "Longitudine"
+
+    df = df.rename(columns=mappa_colonne)
+
     colonne_obbligatorie = [
         "Nome luogo",
         "Tipologia",
@@ -250,6 +293,9 @@ def pulisci_dati(df):
     df["Indirizzo"] = df["Indirizzo"].fillna("").astype(str).str.strip()
     df["Descrizione"] = df["Descrizione"].fillna("").astype(str).str.strip()
     df["URL immagine"] = df["URL immagine"].fillna("").astype(str).str.strip()
+
+    print("URL immagini non vuoti:", (df["URL immagine"] != "").sum())
+    print("Primi URL immagine:", df["URL immagine"].head(10).tolist())
 
     df["Latitudine"] = normalizza_coordinate(df["Latitudine"])
     df["Longitudine"] = normalizza_coordinate(df["Longitudine"])
