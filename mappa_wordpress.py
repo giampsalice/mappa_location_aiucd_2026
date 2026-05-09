@@ -478,28 +478,31 @@ def genera_mappa(df):
     centro_lng = df["Longitudine"].mean()
 
     mappa = folium.Map(
-        location=[centro_lat, centro_lng],
-        zoom_start=13,
-        tiles=None,
-    )
+    location=[centro_lat, centro_lng],
+    zoom_start=13,
+    tiles=None,
+)
 
-    folium.TileLayer(
-        "CartoDB positron",
-        name="Mappa chiara",
-        control=True,
-    ).add_to(mappa)
+folium.TileLayer(
+    tiles="CartoDB positron",
+    name="Mappa chiara",
+    control=True,
+    show=True,
+).add_to(mappa)
 
-    folium.TileLayer(
-        "OpenStreetMap",
-        name="OpenStreetMap",
-        control=True,
-    ).add_to(mappa)
+folium.TileLayer(
+    tiles="OpenStreetMap",
+    name="OpenStreetMap",
+    control=True,
+    show=False,
+).add_to(mappa)
 
-    folium.TileLayer(
-        "CartoDB dark_matter",
-        name="Mappa scura",
-        control=True,
-    ).add_to(mappa)
+folium.TileLayer(
+    tiles="CartoDB dark_matter",
+    name="Mappa scura",
+    control=True,
+    show=False,
+).add_to(mappa)
 
     gruppi = {}
 
