@@ -1,7 +1,6 @@
+import base64
 import html
 import re
-import hashlib
-import mimetypes
 from pathlib import Path
 
 import folium
@@ -21,7 +20,6 @@ FOGLIO_ID = "170qWCxkWG8L3SzniqUIlXyegPRKvHf5g4f6Pe7Cj8xE"
 NOME_TAB = "MAPPA"
 
 FILE_OUTPUT = "mappa_location.html"
-CARTELLA_IMMAGINI = Path("assets/images")
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly",
@@ -109,28 +107,49 @@ def normalizza_coordinate(serie):
 
 def normalizza_colonne(df):
     """
-    Rende più tolleranti i nomi delle colonne del Google Sheet.
+    Normalizza i nomi delle colonne del Google Sheet.
+    Serve a gestire varianti tipo:
+    - URL immagine
+    - url immagine
+    - link foto
+    - immagine
+    - photo
     """
     df.columns = [str(col).strip() for col in df.columns]
 
     mappa_colonne = {}
 
     for colonna in df.columns:
-        nome_normale = str(colonna).strip().lower()
+        nome_normale = (
+            str(colonna)
+            .strip()
+            .lower()
+            .replace("\n", " ")
+            .replace("\r", " ")
+            .replace("\t", " ")
+        )
 
-        if nome_normale in ["url immagine", "url immagini", "immagine", "link immagine", "link immagini"]:
+        nome_normale = " ".join(nome_normale.split())
+
+        if (
+            "immagine" in nome_normale
+            or "immagini" in nome_normale
+            or "image" in nome_normale
+            or "foto" in nome_normale
+            or "photo" in nome_normale
+        ):
             mappa_colonne[colonna] = "URL immagine"
 
-        elif nome_normale in ["nome luogo", "nome", "luogo"]:
+        elif nome_normale in ["nome luogo", "nome", "luogo", "name", "place"]:
             mappa_colonne[colonna] = "Nome luogo"
 
-        elif nome_normale in ["tipologia", "tipo", "categoria"]:
+        elif nome_normale in ["tipologia", "tipo", "categoria", "category", "type"]:
             mappa_colonne[colonna] = "Tipologia"
 
         elif nome_normale in ["indirizzo", "address"]:
             mappa_colonne[colonna] = "Indirizzo"
 
-        elif nome_normale in ["descrizione", "description"]:
+        elif nome_normale in ["descrizione", "description", "desc"]:
             mappa_colonne[colonna] = "Descrizione"
 
         elif nome_normale in ["latitudine", "lat", "latitude"]:
@@ -139,17 +158,15 @@ def normalizza_colonne(df):
         elif nome_normale in ["longitudine", "lon", "lng", "longitude"]:
             mappa_colonne[colonna] = "Longitudine"
 
+    print("Mappa colonne applicata:", mappa_colonne)
+
     return df.rename(columns=mappa_colonne)
 
 
 def converti_url_drive(url):
     """
-    Converte link Google Drive in URL scaricabile.
-
-    Esempi supportati:
-    - https://drive.google.com/file/d/ID_FILE/view?usp=sharing
-    - https://drive.google.com/open?id=ID_FILE
-    - https://drive.google.com/uc?id=ID_FILE
+    Converte eventuali link Google Drive in URL thumbnail.
+    Se l'URL non è Google Drive, lo lascia invariato.
     """
     if not url:
         return ""
@@ -171,30 +188,20 @@ def converti_url_drive(url):
             file_id = match.group(1)
 
     if file_id:
-        return f"https://drive.google.com/uc?export=download&id={file_id}"
+        return f"https://drive.google.com/thumbnail?id={file_id}&sz=w1000"
 
     return url
 
 
-def scarica_immagine(url_immagine, nome_luogo="immagine"):
+def scarica_immagine_base64(url_immagine, nome_luogo="immagine"):
     """
-    Scarica l'immagine indicata nel Google Sheet e la salva localmente
-    dentro assets/images.
-
-    Restituisce il percorso locale da usare nell'HTML.
+    Scarica l'immagine e la incorpora in base64.
+    In questo modo l'immagine finisce direttamente dentro mappa_location.html.
     """
     if not url_immagine:
         return ""
 
-    CARTELLA_IMMAGINI.mkdir(parents=True, exist_ok=True)
-
     url_finale = converti_url_drive(url_immagine)
-
-    hash_url = hashlib.md5(url_finale.encode("utf-8")).hexdigest()[:12]
-
-    nome_pulito = re.sub(r"[^a-zA-Z0-9_-]+", "_", nome_luogo).strip("_")
-    if not nome_pulito:
-        nome_pulito = "immagine"
 
     try:
         response = requests.get(
@@ -202,37 +209,42 @@ def scarica_immagine(url_immagine, nome_luogo="immagine"):
             timeout=30,
             allow_redirects=True,
             headers={
-                "User-Agent": "Mozilla/5.0"
-            }
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0 Safari/537.36"
+                ),
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            },
         )
 
         response.raise_for_status()
 
         content_type = response.headers.get("content-type", "").lower()
 
+        print("---- DEBUG IMMAGINE ----")
+        print(f"Luogo: {nome_luogo}")
+        print(f"URL originale: {url_immagine}")
+        print(f"URL finale usato: {url_finale}")
+        print(f"HTTP status: {response.status_code}")
+        print(f"Content-Type ricevuto: {content_type}")
+        print(f"Dimensione contenuto: {len(response.content)} byte")
+
         if "image" not in content_type:
-            print(f"ATTENZIONE: URL non sembra essere un'immagine: {url_immagine}")
-            print(f"URL finale usato: {url_finale}")
-            print(f"Content-Type ricevuto: {content_type}")
+            print(f"ATTENZIONE: URL non sembra essere un'immagine per {nome_luogo}")
             return ""
 
-        estensione = mimetypes.guess_extension(content_type.split(";")[0]) or ".jpg"
+        immagine_base64 = base64.b64encode(response.content).decode("utf-8")
 
-        if estensione == ".jpe":
-            estensione = ".jpg"
+        print(f"Immagine incorporata correttamente per: {nome_luogo}")
 
-        nome_file = f"{nome_pulito}_{hash_url}{estensione}"
-        percorso_file = CARTELLA_IMMAGINI / nome_file
-
-        with open(percorso_file, "wb") as f:
-            f.write(response.content)
-
-        print(f"Immagine scaricata: {percorso_file}")
-
-        return str(percorso_file).replace("\\", "/")
+        return f"data:{content_type};base64,{immagine_base64}"
 
     except Exception as e:
-        print(f"ERRORE download immagine per {nome_luogo}: {url_immagine}")
+        print("---- ERRORE IMMAGINE ----")
+        print(f"Luogo: {nome_luogo}")
+        print(f"URL originale: {url_immagine}")
+        print(f"URL finale usato: {url_finale}")
         print(e)
         return ""
 
@@ -240,24 +252,23 @@ def scarica_immagine(url_immagine, nome_luogo="immagine"):
 def crea_html_immagine(url_immagine, nome_luogo="immagine"):
     """
     Crea il blocco HTML dell'immagine nel popup.
-    Prima scarica l'immagine localmente, poi usa il file locale.
     """
     if not url_immagine:
         return ""
 
-    percorso_locale = scarica_immagine(url_immagine, nome_luogo)
+    src_immagine = scarica_immagine_base64(url_immagine, nome_luogo)
 
-    if not percorso_locale:
+    if not src_immagine:
         return ""
 
-    percorso_locale = html.escape(percorso_locale, quote=True)
+    src_immagine = html.escape(src_immagine, quote=True)
 
     return f"""
         <img
-            src="{percorso_locale}"
+            src="{src_immagine}"
             style="
                 width:100%;
-                max-height:170px;
+                max-height:180px;
                 object-fit:cover;
                 border-radius:10px;
                 margin-bottom:10px;
@@ -283,7 +294,7 @@ def carica_dati():
 
     credenziali = Credentials.from_service_account_file(
         str(PERCORSO_CREDENZIALI),
-        scopes=SCOPES
+        scopes=SCOPES,
     )
 
     client = gspread.authorize(credenziali)
@@ -309,6 +320,13 @@ def pulisci_dati(df):
     df = normalizza_colonne(df)
 
     print("Colonne dopo normalizzazione:", list(df.columns))
+
+    print("DEBUG colonne con repr:")
+    for col in df.columns:
+        print(repr(col))
+
+    print("DEBUG prime 3 righe:")
+    print(df.head(3).to_string())
 
     colonne_obbligatorie = [
         "Nome luogo",
@@ -396,8 +414,8 @@ def crea_popup(row):
     html_popup = f"""
     <div style="
         font-family: Arial, sans-serif;
-        width: 260px;
-        max-width: 260px;
+        width: 270px;
+        max-width: 270px;
     ">
         {html_immagine}
 
@@ -447,8 +465,8 @@ def crea_popup(row):
     </div>
     """
 
-    iframe = folium.IFrame(html_popup, width=300, height=380)
-    return folium.Popup(iframe, max_width=320)
+    iframe = folium.IFrame(html_popup, width=320, height=430)
+    return folium.Popup(iframe, max_width=340)
 
 
 # ============================================================
@@ -459,15 +477,29 @@ def genera_mappa(df):
     centro_lat = df["Latitudine"].mean()
     centro_lng = df["Longitudine"].mean()
 
-    # Puoi cambiare tiles con:
-    # "OpenStreetMap"
-    # "CartoDB positron"
-    # "CartoDB dark_matter"
     mappa = folium.Map(
         location=[centro_lat, centro_lng],
         zoom_start=13,
-        tiles="CartoDB positron"
+        tiles=None,
     )
+
+    folium.TileLayer(
+        "CartoDB positron",
+        name="Mappa chiara",
+        control=True,
+    ).add_to(mappa)
+
+    folium.TileLayer(
+        "OpenStreetMap",
+        name="OpenStreetMap",
+        control=True,
+    ).add_to(mappa)
+
+    folium.TileLayer(
+        "CartoDB dark_matter",
+        name="Mappa scura",
+        control=True,
+    ).add_to(mappa)
 
     gruppi = {}
 
@@ -490,8 +522,8 @@ def genera_mappa(df):
             icon=folium.Icon(
                 color=stile["colore"],
                 icon=stile["icona"],
-                prefix="fa"
-            )
+                prefix="fa",
+            ),
         )
 
         if tipologia in gruppi:
