@@ -2,3 +2,4 @@ gspread
 pandas
 folium
 google-auth
+requests
