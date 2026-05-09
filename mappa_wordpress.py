@@ -365,7 +365,7 @@ def genera_mappa(df):
     mappa = folium.Map(
         location=[centro_lat, centro_lng],
         zoom_start=13,
-        tiles="OpenStreetMap"
+        tiles="CartoDB positron"
     )
 
     gruppi = {}
