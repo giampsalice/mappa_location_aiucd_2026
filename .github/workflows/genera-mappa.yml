@@ -27,6 +27,13 @@ jobs:
       - name: Scarica repository
         uses: actions/checkout@v4
 
+      - name: Mostra file presenti
+        run: |
+          ls -la
+          echo "Controllo file Python:"
+          sed -n '1,25p' mappa_wordpress.py
+          grep -n "PERCORSO_CREDENZIALI" mappa_wordpress.py
+
       - name: Configura Python
         uses: actions/setup-python@v5
         with:
@@ -36,25 +43,16 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Crea file credenziali Google
-        run: echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > credenziali.json
+        run: |
+          printf '%s' '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > credenziali.json
+          ls -la credenziali.json
 
-      - - name: Controlla quale file Python viene eseguito
-  run: |
-    echo "File presenti nella cartella:"
-    ls -la
-
-    echo "Prime 25 righe di mappa_wordpress.py:"
-    sed -n '1,25p' mappa_wordpress.py
-
-    echo "Righe con PERCORSO_CREDENZIALI:"
-    grep -n "PERCORSO_CREDENZIALI" mappa_wordpress.py
-
-- name: Genera mappa
-  run: python mappa_wordpress.py
+      - name: Genera mappa
+        run: python mappa_wordpress.py
 
       - name: Prepara cartella pubblica
         run: |
-          mkdir public
+          mkdir -p public
           cp mappa_location.html public/index.html
           cp mappa_location.html public/mappa_location.html
 
