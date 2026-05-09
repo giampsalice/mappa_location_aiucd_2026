@@ -108,11 +108,12 @@ def normalizza_coordinate(serie):
 def normalizza_colonne(df):
     """
     Normalizza i nomi delle colonne del Google Sheet.
-    Serve a gestire varianti tipo:
+    Gestisce varianti tipo:
     - URL immagine
     - url immagine
     - link foto
     - immagine
+    - image
     - photo
     """
     df.columns = [str(col).strip() for col in df.columns]
@@ -161,6 +162,62 @@ def normalizza_colonne(df):
     print("Mappa colonne applicata:", mappa_colonne)
 
     return df.rename(columns=mappa_colonne)
+
+
+def sembra_url_immagine(valore):
+    """
+    Riconosce se una cella contiene un URL plausibile di immagine.
+    Serve come fallback se il nome della colonna immagini non viene riconosciuto.
+    """
+    if pd.isna(valore):
+        return False
+
+    testo = str(valore).strip().lower()
+
+    if not testo.startswith("http"):
+        return False
+
+    indicatori = [
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+        ".gif",
+        "wikimedia.org",
+        "googleusercontent.com",
+        "sardegnaturismo.it",
+        "tripadvisor.com",
+        "ytimg.com",
+        "cagliariturismo",
+        "sardegnacultura",
+        "citynews",
+    ]
+
+    return any(indicatore in testo for indicatore in indicatori)
+
+
+def trova_colonna_immagini_automaticamente(df):
+    """
+    Cerca automaticamente la colonna che contiene più URL immagine.
+    """
+    migliore_colonna = None
+    massimo_url = 0
+
+    for colonna in df.columns:
+        conteggio = df[colonna].apply(sembra_url_immagine).sum()
+
+        print(f"DEBUG colonna '{colonna}': {conteggio} possibili URL immagine")
+
+        if conteggio > massimo_url:
+            massimo_url = conteggio
+            migliore_colonna = colonna
+
+    if migliore_colonna and massimo_url > 0:
+        print(f"Colonna immagini trovata automaticamente: {migliore_colonna}")
+        return migliore_colonna
+
+    print("Nessuna colonna immagini trovata automaticamente.")
+    return None
 
 
 def converti_url_drive(url):
@@ -356,6 +413,13 @@ def pulisci_dati(df):
         if colonna not in df.columns:
             df[colonna] = ""
 
+    # Fallback: se la colonna URL immagine è vuota o non riconosciuta,
+    # prova a trovare automaticamente la colonna che contiene URL immagine.
+    colonna_auto_immagini = trova_colonna_immagini_automaticamente(df)
+
+    if colonna_auto_immagini:
+        df["URL immagine"] = df[colonna_auto_immagini]
+
     df["Nome luogo"] = df["Nome luogo"].fillna("").astype(str).str.strip()
     df["Tipologia"] = df["Tipologia"].fillna("Altro").astype(str).str.strip()
     df["Tipologia"] = df["Tipologia"].replace("", "Altro")
@@ -477,32 +541,27 @@ def genera_mappa(df):
     centro_lat = df["Latitudine"].mean()
     centro_lng = df["Longitudine"].mean()
 
+    # Mappa chiara impostata come layer di default.
     mappa = folium.Map(
-    location=[centro_lat, centro_lng],
-    zoom_start=13,
-    tiles=None,
-)
+        location=[centro_lat, centro_lng],
+        zoom_start=13,
+        tiles="CartoDB positron",
+    )
 
-folium.TileLayer(
-    tiles="CartoDB positron",
-    name="Mappa chiara",
-    control=True,
-    show=True,
-).add_to(mappa)
+    # Layer alternativi selezionabili.
+    folium.TileLayer(
+        tiles="OpenStreetMap",
+        name="OpenStreetMap",
+        control=True,
+        show=False,
+    ).add_to(mappa)
 
-folium.TileLayer(
-    tiles="OpenStreetMap",
-    name="OpenStreetMap",
-    control=True,
-    show=False,
-).add_to(mappa)
-
-folium.TileLayer(
-    tiles="CartoDB dark_matter",
-    name="Mappa scura",
-    control=True,
-    show=False,
-).add_to(mappa)
+    folium.TileLayer(
+        tiles="CartoDB dark_matter",
+        name="Mappa scura",
+        control=True,
+        show=False,
+    ).add_to(mappa)
 
     gruppi = {}
 
