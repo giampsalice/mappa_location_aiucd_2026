@@ -1,10 +1,13 @@
 import html
 import re
+import hashlib
+import mimetypes
 from pathlib import Path
 
 import folium
 import gspread
 import pandas as pd
+import requests
 from google.oauth2.service_account import Credentials
 
 
@@ -18,6 +21,7 @@ FOGLIO_ID = "170qWCxkWG8L3SzniqUIlXyegPRKvHf5g4f6Pe7Cj8xE"
 NOME_TAB = "MAPPA"
 
 FILE_OUTPUT = "mappa_location.html"
+CARTELLA_IMMAGINI = Path("assets/images")
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly",
@@ -27,14 +31,11 @@ SCOPES = [
 
 # ============================================================
 # STILI MARKER PER TIPOLOGIA
-# Puoi aggiungere o modificare le tipologie qui.
-# I nomi devono corrispondere alla colonna "Tipologia" del Google Sheet.
 # ============================================================
 
 STILE_TIPOLOGIE = {
     "Aperitivo": {"colore": "orange", "icona": "glass"},
     "aperitivo": {"colore": "orange", "icona": "glass"},
-    "Mezzi pubblici": {"colore": "brown", "icona": "bus"},
 
     "Museo o visita culturale": {"colore": "purple", "icona": "university"},
     "Culturale": {"colore": "purple", "icona": "university"},
@@ -53,6 +54,8 @@ STILE_TIPOLOGIE = {
     "Hotel": {"colore": "darkblue", "icona": "bed"},
 
     "Sede del Convegno": {"colore": "darkred", "icona": "building"},
+
+    "Mezzi pubblici": {"colore": "green", "icona": "bus"},
 
     "Altro": {"colore": "gray", "icona": "map-marker"},
 }
@@ -78,10 +81,6 @@ COLORI_HEX = {
 # ============================================================
 
 def ottieni_stile(tipologia):
-    """
-    Restituisce colore e icona in base alla tipologia.
-    Se la tipologia non è presente nel dizionario, usa "Altro".
-    """
     if pd.isna(tipologia):
         return STILE_TIPOLOGIE["Altro"]
 
@@ -90,9 +89,6 @@ def ottieni_stile(tipologia):
 
 
 def valore_testo(row, colonna, default=""):
-    """
-    Legge un valore da una riga pandas evitando errori su celle vuote.
-    """
     if colonna not in row:
         return default
 
@@ -105,28 +101,55 @@ def valore_testo(row, colonna, default=""):
 
 
 def normalizza_coordinate(serie):
-    """
-    Converte coordinate anche se nel foglio sono scritte con virgola italiana.
-    Esempio: 39,2165 diventa 39.2165
-    """
     return pd.to_numeric(
         serie.astype(str).str.replace(",", ".", regex=False),
         errors="coerce"
     )
 
 
+def normalizza_colonne(df):
+    """
+    Rende più tolleranti i nomi delle colonne del Google Sheet.
+    """
+    df.columns = [str(col).strip() for col in df.columns]
+
+    mappa_colonne = {}
+
+    for colonna in df.columns:
+        nome_normale = str(colonna).strip().lower()
+
+        if nome_normale in ["url immagine", "url immagini", "immagine", "link immagine", "link immagini"]:
+            mappa_colonne[colonna] = "URL immagine"
+
+        elif nome_normale in ["nome luogo", "nome", "luogo"]:
+            mappa_colonne[colonna] = "Nome luogo"
+
+        elif nome_normale in ["tipologia", "tipo", "categoria"]:
+            mappa_colonne[colonna] = "Tipologia"
+
+        elif nome_normale in ["indirizzo", "address"]:
+            mappa_colonne[colonna] = "Indirizzo"
+
+        elif nome_normale in ["descrizione", "description"]:
+            mappa_colonne[colonna] = "Descrizione"
+
+        elif nome_normale in ["latitudine", "lat", "latitude"]:
+            mappa_colonne[colonna] = "Latitudine"
+
+        elif nome_normale in ["longitudine", "lon", "lng", "longitude"]:
+            mappa_colonne[colonna] = "Longitudine"
+
+    return df.rename(columns=mappa_colonne)
+
+
 def converti_url_drive(url):
     """
-    Converte link Google Drive in URL compatibili con immagini nei popup.
-    Accetta formati come:
+    Converte link Google Drive in URL scaricabile.
+
+    Esempi supportati:
     - https://drive.google.com/file/d/ID_FILE/view?usp=sharing
     - https://drive.google.com/open?id=ID_FILE
     - https://drive.google.com/uc?id=ID_FILE
-
-    Restituisce:
-    - https://drive.google.com/thumbnail?id=ID_FILE&sz=w1000
-
-    Se l'URL non è Google Drive, lo lascia invariato.
     """
     if not url:
         return ""
@@ -148,26 +171,90 @@ def converti_url_drive(url):
             file_id = match.group(1)
 
     if file_id:
-        return f"https://drive.google.com/thumbnail?id={file_id}&sz=w1000"
+        return f"https://drive.google.com/uc?export=download&id={file_id}"
 
     return url
 
 
-def crea_html_immagine(url_immagine):
+def scarica_immagine(url_immagine, nome_luogo="immagine"):
     """
-    Crea il blocco HTML dell'immagine nel popup.
-    Se non c'è immagine, restituisce stringa vuota.
-    Se l'immagine non si carica, la nasconde.
+    Scarica l'immagine indicata nel Google Sheet e la salva localmente
+    dentro assets/images.
+
+    Restituisce il percorso locale da usare nell'HTML.
     """
     if not url_immagine:
         return ""
 
-    url_immagine = converti_url_drive(url_immagine)
-    url_immagine = html.escape(url_immagine, quote=True)
+    CARTELLA_IMMAGINI.mkdir(parents=True, exist_ok=True)
+
+    url_finale = converti_url_drive(url_immagine)
+
+    hash_url = hashlib.md5(url_finale.encode("utf-8")).hexdigest()[:12]
+
+    nome_pulito = re.sub(r"[^a-zA-Z0-9_-]+", "_", nome_luogo).strip("_")
+    if not nome_pulito:
+        nome_pulito = "immagine"
+
+    try:
+        response = requests.get(
+            url_finale,
+            timeout=30,
+            allow_redirects=True,
+            headers={
+                "User-Agent": "Mozilla/5.0"
+            }
+        )
+
+        response.raise_for_status()
+
+        content_type = response.headers.get("content-type", "").lower()
+
+        if "image" not in content_type:
+            print(f"ATTENZIONE: URL non sembra essere un'immagine: {url_immagine}")
+            print(f"URL finale usato: {url_finale}")
+            print(f"Content-Type ricevuto: {content_type}")
+            return ""
+
+        estensione = mimetypes.guess_extension(content_type.split(";")[0]) or ".jpg"
+
+        if estensione == ".jpe":
+            estensione = ".jpg"
+
+        nome_file = f"{nome_pulito}_{hash_url}{estensione}"
+        percorso_file = CARTELLA_IMMAGINI / nome_file
+
+        with open(percorso_file, "wb") as f:
+            f.write(response.content)
+
+        print(f"Immagine scaricata: {percorso_file}")
+
+        return str(percorso_file).replace("\\", "/")
+
+    except Exception as e:
+        print(f"ERRORE download immagine per {nome_luogo}: {url_immagine}")
+        print(e)
+        return ""
+
+
+def crea_html_immagine(url_immagine, nome_luogo="immagine"):
+    """
+    Crea il blocco HTML dell'immagine nel popup.
+    Prima scarica l'immagine localmente, poi usa il file locale.
+    """
+    if not url_immagine:
+        return ""
+
+    percorso_locale = scarica_immagine(url_immagine, nome_luogo)
+
+    if not percorso_locale:
+        return ""
+
+    percorso_locale = html.escape(percorso_locale, quote=True)
 
     return f"""
         <img
-            src="{url_immagine}"
+            src="{percorso_locale}"
             style="
                 width:100%;
                 max-height:170px;
@@ -178,7 +265,6 @@ def crea_html_immagine(url_immagine):
                 background:#eeeeee;
             "
             loading="lazy"
-            referrerpolicy="no-referrer"
             onerror="this.style.display='none';"
         >
     """
@@ -189,11 +275,7 @@ def crea_html_immagine(url_immagine):
 # ============================================================
 
 def carica_dati():
-    """
-    Legge i dati dal Google Sheet usando il service account.
-    Il file credenziali.json viene creato da GitHub Actions.
-    """
-    if not PERCORSO_CREDENZIALI.exists():
+    if not Path(PERCORSO_CREDENZIALI).exists():
         raise FileNotFoundError(
             "File credenziali.json non trovato. "
             "Su GitHub Actions verifica il secret GOOGLE_CREDENTIALS_JSON."
@@ -221,42 +303,12 @@ def carica_dati():
 # ============================================================
 
 def pulisci_dati(df):
-    """
-    Controlla colonne, pulisce celle vuote e rimuove righe senza coordinate.
-    """
     if df.empty:
         raise ValueError("Il Google Sheet è vuoto o non contiene dati leggibili.")
 
-    df.columns = [str(col).strip() for col in df.columns]
+    df = normalizza_colonne(df)
 
-    # Normalizzazione dei nomi colonna per permettere variazioni
-    mappa_colonne = {}
-
-    for colonna in df.columns:
-        nome_normale = str(colonna).strip().lower()
-
-        if nome_normale in ["url immagine", "url immagini", "immagine", "link immagine", "link immagini"]:
-            mappa_colonne[colonna] = "URL immagine"
-
-        if nome_normale in ["nome luogo", "nome", "luogo"]:
-            mappa_colonne[colonna] = "Nome luogo"
-
-        if nome_normale in ["tipologia", "tipo", "categoria"]:
-            mappa_colonne[colonna] = "Tipologia"
-
-        if nome_normale in ["indirizzo", "address"]:
-            mappa_colonne[colonna] = "Indirizzo"
-
-        if nome_normale in ["descrizione", "description"]:
-            mappa_colonne[colonna] = "Descrizione"
-
-        if nome_normale in ["latitudine", "lat", "latitude"]:
-            mappa_colonne[colonna] = "Latitudine"
-
-        if nome_normale in ["longitudine", "lon", "lng", "longitude"]:
-            mappa_colonne[colonna] = "Longitudine"
-
-    df = df.rename(columns=mappa_colonne)
+    print("Colonne dopo normalizzazione:", list(df.columns))
 
     colonne_obbligatorie = [
         "Nome luogo",
@@ -324,21 +376,22 @@ def pulisci_dati(df):
 # ============================================================
 
 def crea_popup(row):
-    """
-    Crea il popup HTML per ogni marker.
-    Include immagine, nome, tipologia, indirizzo e descrizione.
-    """
-    nome = html.escape(valore_testo(row, "Nome luogo"))
-    tipologia = html.escape(valore_testo(row, "Tipologia", "Altro"))
-    indirizzo = html.escape(valore_testo(row, "Indirizzo"))
-    descrizione = html.escape(valore_testo(row, "Descrizione"))
+    nome_raw = valore_testo(row, "Nome luogo")
+    tipologia_raw = valore_testo(row, "Tipologia", "Altro")
+    indirizzo_raw = valore_testo(row, "Indirizzo")
+    descrizione_raw = valore_testo(row, "Descrizione")
     url_immagine = valore_testo(row, "URL immagine")
 
-    stile = ottieni_stile(tipologia)
+    nome = html.escape(nome_raw)
+    tipologia = html.escape(tipologia_raw)
+    indirizzo = html.escape(indirizzo_raw)
+    descrizione = html.escape(descrizione_raw)
+
+    stile = ottieni_stile(tipologia_raw)
     colore_marker = stile["colore"]
     colore_hex = COLORI_HEX.get(colore_marker, "#808080")
 
-    html_immagine = crea_html_immagine(url_immagine)
+    html_immagine = crea_html_immagine(url_immagine, nome_raw)
 
     html_popup = f"""
     <div style="
@@ -394,7 +447,7 @@ def crea_popup(row):
     </div>
     """
 
-    iframe = folium.IFrame(html_popup, width=300, height=360)
+    iframe = folium.IFrame(html_popup, width=300, height=380)
     return folium.Popup(iframe, max_width=320)
 
 
@@ -403,12 +456,13 @@ def crea_popup(row):
 # ============================================================
 
 def genera_mappa(df):
-    """
-    Genera la mappa Folium e la salva come HTML.
-    """
     centro_lat = df["Latitudine"].mean()
     centro_lng = df["Longitudine"].mean()
 
+    # Puoi cambiare tiles con:
+    # "OpenStreetMap"
+    # "CartoDB positron"
+    # "CartoDB dark_matter"
     mappa = folium.Map(
         location=[centro_lat, centro_lng],
         zoom_start=13,
