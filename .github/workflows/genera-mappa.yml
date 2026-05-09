@@ -1,0 +1,59 @@
+name: Genera e pubblica mappa
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+  schedule:
+    - cron: "0 */6 * * *"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Scarica repository
+        uses: actions/checkout@v4
+
+      - name: Configura Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installa dipendenze
+        run: pip install -r requirements.txt
+
+      - name: Crea file credenziali Google
+        run: echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > credenziali.json
+
+      - name: Genera mappa
+        run: python mappa_wordpress.py
+
+      - name: Prepara cartella pubblica
+        run: |
+          mkdir public
+          cp mappa_location.html public/index.html
+          cp mappa_location.html public/mappa_location.html
+
+      - name: Configura GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Carica artifact Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Pubblica su GitHub Pages
+        uses: actions/deploy-pages@v4
