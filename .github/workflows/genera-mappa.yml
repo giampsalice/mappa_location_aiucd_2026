@@ -38,8 +38,19 @@ jobs:
       - name: Crea file credenziali Google
         run: echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > credenziali.json
 
-      - name: Genera mappa
-        run: python mappa_wordpress.py
+      - - name: Controlla quale file Python viene eseguito
+  run: |
+    echo "File presenti nella cartella:"
+    ls -la
+
+    echo "Prime 25 righe di mappa_wordpress.py:"
+    sed -n '1,25p' mappa_wordpress.py
+
+    echo "Righe con PERCORSO_CREDENZIALI:"
+    grep -n "PERCORSO_CREDENZIALI" mappa_wordpress.py
+
+- name: Genera mappa
+  run: python mappa_wordpress.py
 
       - name: Prepara cartella pubblica
         run: |
